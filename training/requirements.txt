@@ -1,0 +1,9 @@
+unsloth
+torch
+datasets
+trl
+transformers
+scikit-learn
+bitsandbytes
+peft
+neptune
