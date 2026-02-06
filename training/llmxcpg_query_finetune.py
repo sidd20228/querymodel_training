@@ -1,14 +1,16 @@
 from unsloth import FastLanguageModel, is_bfloat16_supported
 import torch
-import torch.nn as nn
 from unsloth.chat_templates import get_chat_template, standardize_sharegpt, train_on_responses_only
 from datasets import Dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments, DataCollatorForSeq2Seq
+from huggingface_hub import HfApi, login
 import json
 import logging
 import argparse
+import os
 from sklearn.model_selection import train_test_split
+import bitsandbytes as bnb
 
 def setup_logging():
     logging.basicConfig(
@@ -53,11 +55,11 @@ def formatting_prompts_func(examples, tokenizer):
     return {"text": texts}
 
 def find_all_linear_names(model):
-    import torch.nn as nn
+    cls = bnb.nn.Linear4bit
     lora_module_names = set()
 
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear):
+        if isinstance(module, cls):
             names = name.split('.')
             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
 
@@ -70,35 +72,21 @@ def setup_model_and_tokenizer(args, logger):
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model_name,
         max_seq_length=args.max_seq_length,
-        dtype=torch.bfloat16,  # Full bfloat16 precision for A100
-        load_in_4bit=False,  # No quantization for best quality
-        attn_implementation="flash_attention_2",  # Flash Attention 2 for speed
+        dtype=None,
+        load_in_4bit=True,
     )
 
-    # Check if full fine-tuning is requested
-    if args.use_full_finetuning:
-        logger.info("Using FULL fine-tuning (all parameters trainable) on A100 80GB")
-        logger.info("This will provide the best model quality but requires significant VRAM")
-        # All parameters already trainable by default
-        tokenizer = get_chat_template(
-            tokenizer,
-            chat_template="qwen2.5",
-        )
-        return model, tokenizer
-    
-    # Otherwise use LoRA for parameter-efficient fine-tuning
     target_modules = find_all_linear_names(model)
     logger.info(f"Target Modules: {str(target_modules)}")
-    logger.info(f"Training with LoRA (rank={args.rank}, alpha={args.alpha}) in bfloat16 on A100 80GB")
 
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.rank,
         target_modules=target_modules,
         lora_alpha=args.alpha,
-        lora_dropout=0.0,  # No dropout for maximum capacity with high rank
+        lora_dropout=0.1,
         bias="none",
-        use_gradient_checkpointing=False,  # Disabled for speed on A100
+        use_gradient_checkpointing="unsloth",
         random_state=args.seed,
         use_rslora=True,
         loftq_config=None,
@@ -112,43 +100,31 @@ def setup_model_and_tokenizer(args, logger):
     return model, tokenizer
 
 def setup_trainer(model, tokenizer, train_dataset, eval_dataset, args, logger):
-    num_training_steps = len(train_dataset) * args.epochs // (args.batch_size * args.gradient_accumulation_steps)
-    logger.info(f"Total training steps: {num_training_steps}")
-    
+    num_training_steps = len(train_dataset) * args.epochs // args.batch_size
     training_args = TrainingArguments(
         per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size * 2,  # Larger eval batch
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        warmup_steps=max(100, num_training_steps // 10),  # More warmup for stability
+        warmup_ratio=0.10,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps,
         learning_rate=args.learning_rate,
-        fp16=False,  # Force bfloat16 for A100
-        bf16=True,
-        bf16_full_eval=True,  # Use bf16 for evaluation too
+        fp16=not is_bfloat16_supported(),
+        bf16=is_bfloat16_supported(),
         logging_steps=args.logging_steps,
-        optim="adamw_torch_fused",  # Fastest optimizer for A100
+        optim="paged_adamw_8bit",
         weight_decay=args.weight_decay,
-        lr_scheduler_type="cosine",
-        max_grad_norm=1.0,
+        lr_scheduler_type="linear",
         seed=args.seed,
         output_dir=args.model_output_dir,
         report_to="neptune",
         save_strategy="steps",
-        save_steps=max(50, num_training_steps // 10),  # More frequent saves
+        save_steps=min(100, num_training_steps // 5) if num_training_steps > 0 else 100,
         eval_strategy="steps",
-        eval_steps=max(50, num_training_steps // 10),
-        metric_for_best_model="eval_loss",
+        eval_steps=min(100, num_training_steps // 5) if num_training_steps > 0 else 100,
+        metric_for_best_model="loss",
         load_best_model_at_end=True,
-        save_total_limit=5,  # Keep more checkpoints with A100 storage
-        greater_is_better=False,
-        eval_accumulation_steps=1,
-        logging_first_step=True,
-        dataloader_num_workers=4,  # Parallel data loading
-        dataloader_pin_memory=True,  # Pin memory for faster transfer
-        gradient_checkpointing=False,  # Disabled for speed
-        ddp_find_unused_parameters=False,
-        group_by_length=False,  # Can enable if variable length samples
+        save_total_limit=2,
+        greater_is_better=False
     )
 
     trainer = SFTTrainer(
@@ -176,22 +152,24 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--dataset_path", type=str, required=True)
-    parser.add_argument("--max_seq_length", type=int, default=32768, help="Longer context for A100")
-    parser.add_argument("--batch_size", type=int, default=8, help="Large batch for A100 80GB")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Effective batch size = 16")
-    parser.add_argument("--epochs", type=int, default=5, help="More epochs for better convergence")
+    parser.add_argument("--max_seq_length", type=int, default=28000)
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--max_steps", type=int, default=0)
-    parser.add_argument("--learning_rate", type=float, default=2e-4, help="Higher LR with larger batches")
+    parser.add_argument("--learning_rate", type=float, default=2e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--logging_steps", type=int, default=5, help="Frequent logging")
+    parser.add_argument("--logging_steps", type=int, default=2)
     parser.add_argument("--num_proc", type=int, default=16)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--experiment_name", default="LLMxCPG-Q")
     parser.add_argument("--output_dir", type=str, default="./models")
     parser.add_argument("--eval_split_ratio", type=float, default=0.1)
-    parser.add_argument("--rank", type=int, default=128, help="High rank for A100 - maximum capacity")
-    parser.add_argument("--alpha", type=int, default=256, help="LoRA alpha parameter - 2x rank")
-    parser.add_argument("--use_full_finetuning", action="store_true", help="Use full fine-tuning instead of LoRA (requires more memory but best quality)")
+    parser.add_argument("--rank", type=int, default=8, help="LoRA attention dimension (rank)")
+    parser.add_argument("--alpha", type=int, default=16, help="LoRA alpha parameter")
+    parser.add_argument("--push_to_hub", action="store_true", help="Push model to HuggingFace Hub")
+    parser.add_argument("--hf_repo_id", type=str, help="HuggingFace Hub repository ID (username/model-name)")
+    parser.add_argument("--hf_token", type=str, help="HuggingFace token (or set HF_TOKEN env var)")
     args = parser.parse_args()
     args.model_output_dir = f"{args.output_dir}/{args.model_name.split('/')[-1]}_{args.experiment_name}"
     return args
@@ -205,7 +183,6 @@ def main():
 
     logger.info(f"Loading dataset from: {args.dataset_path} and splitting for evaluation ({args.eval_split_ratio*100:.0f}/{100 - args.eval_split_ratio*100:.0f})")
     train_dataset, eval_dataset = load_json_dataset(args.dataset_path, args.eval_split_ratio)
-    logger.info(f"Dataset loaded: {len(train_dataset)} training samples, {len(eval_dataset)} evaluation samples")
 
     train_dataset = standardize_sharegpt(train_dataset)
     eval_dataset = standardize_sharegpt(eval_dataset)
@@ -225,12 +202,54 @@ def main():
     logger.info("Starting training")
     trainer_stats = trainer.train()
 
-    logger.info("Saving model")
-
+    logger.info("Saving model locally")
     model.save_pretrained(args.model_output_dir)
     tokenizer.save_pretrained(args.model_output_dir)
 
+    logger.info("Saving merged model for vLLM")
     model.save_pretrained_merged(args.model_output_dir + "-vLLM", tokenizer, save_method = "merged_16bit",)
+
+    # Push to HuggingFace Hub if requested
+    if args.push_to_hub:
+        logger.info("Pushing model to HuggingFace Hub")
+        
+        # Get token from argument or environment variable
+        hf_token = args.hf_token or os.getenv("HF_TOKEN")
+        
+        if not hf_token:
+            logger.error("HuggingFace token not provided. Set --hf_token or HF_TOKEN environment variable")
+        elif not args.hf_repo_id:
+            logger.error("HuggingFace repository ID not provided. Set --hf_repo_id")
+        else:
+            try:
+                # Login to HuggingFace
+                login(token=hf_token)
+                
+                # Push LoRA adapters
+                logger.info(f"Pushing LoRA adapters to {args.hf_repo_id}")
+                model.push_to_hub(args.hf_repo_id, token=hf_token)
+                tokenizer.push_to_hub(args.hf_repo_id, token=hf_token)
+                
+                # Push merged model
+                merged_repo_id = f"{args.hf_repo_id}-merged"
+                logger.info(f"Pushing merged model to {merged_repo_id}")
+                
+                # Load and push merged model
+                merged_model_path = args.model_output_dir + "-vLLM"
+                api = HfApi()
+                api.upload_folder(
+                    folder_path=merged_model_path,
+                    repo_id=merged_repo_id,
+                    repo_type="model",
+                    token=hf_token
+                )
+                
+                logger.info(f"✅ Model successfully pushed to HuggingFace Hub!")
+                logger.info(f"   LoRA adapters: https://huggingface.co/{args.hf_repo_id}")
+                logger.info(f"   Merged model: https://huggingface.co/{merged_repo_id}")
+                
+            except Exception as e:
+                logger.error(f"Failed to push to HuggingFace Hub: {e}")
 
     logger.info("Training completed")
     return trainer_stats

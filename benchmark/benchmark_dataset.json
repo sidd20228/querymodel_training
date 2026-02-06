@@ -1,0 +1,150 @@
+[
+    {
+        "id": "bench_001",
+        "name": "Buffer Overflow - gets()",
+        "cwe": "CWE-120",
+        "vulnerability_type": "Buffer Overflow",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void process_user_input() {\n    char buffer[256];\n    printf(\"Enter your name: \");\n    gets(buffer);  // Vulnerable: no bounds checking\n    printf(\"Hello, %s!\\n\", buffer);\n}",
+        "ground_truth_queries": [
+            "val sources = cpg.call.name(\"gets\").argument.isIdentifier.l",
+            "val sinks = cpg.call.name(\"printf\").argument.isIdentifier.l",
+            "sinks.reachableByFlows(sources)"
+        ],
+        "expected_vulnerability": "Buffer overflow via gets() allowing arbitrary data to overflow the 256-byte buffer"
+    },
+    {
+        "id": "bench_002",
+        "name": "Use After Free",
+        "cwe": "CWE-416",
+        "vulnerability_type": "Use After Free",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void process_data() {\n    char *data = (char*)malloc(1024);\n    strcpy(data, \"sensitive information\");\n    \n    free(data);\n    \n    // Use after free vulnerability\n    if (strlen(data) > 0) {\n        printf(\"Data: %s\\n\", data);\n    }\n}",
+        "ground_truth_queries": [
+            "val freeCall = cpg.call.name(\"free\").argument.isIdentifier.l",
+            "val useAfterFree = cpg.call.name(\"strlen|printf\").argument.isIdentifier.l",
+            "useAfterFree.reachableByFlows(freeCall)"
+        ],
+        "expected_vulnerability": "Use of freed memory pointer 'data' after free() call"
+    },
+    {
+        "id": "bench_003",
+        "name": "SQL Injection",
+        "cwe": "CWE-89",
+        "vulnerability_type": "SQL Injection",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void login_user(char *username, char *password) {\n    char query[512];\n    sqlite3 *db;\n    \n    // Vulnerable: SQL injection via string concatenation\n    sprintf(query, \"SELECT * FROM users WHERE username='%s' AND password='%s'\", \n            username, password);\n    \n    sqlite3_exec(db, query, NULL, 0, NULL);\n}",
+        "ground_truth_queries": [
+            "val userInputs = cpg.method.name(\"login_user\").parameter.name(\"username|password\").l",
+            "val querySinks = cpg.call.name(\"sprintf\").argument.isIdentifier.l",
+            "val execSinks = cpg.call.name(\"sqlite3_exec\").argument.isIdentifier.l",
+            "execSinks.reachableByFlows(userInputs)"
+        ],
+        "expected_vulnerability": "SQL injection through unsanitized username and password parameters"
+    },
+    {
+        "id": "bench_004",
+        "name": "Integer Overflow",
+        "cwe": "CWE-190",
+        "vulnerability_type": "Integer Overflow",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void* allocate_image_buffer(unsigned int width, unsigned int height) {\n    unsigned int size = width * height * 4;  // Potential integer overflow\n    void *buffer = malloc(size);\n    \n    if (buffer == NULL) {\n        return NULL;\n    }\n    \n    memset(buffer, 0, size);\n    return buffer;\n}",
+        "ground_truth_queries": [
+            "val params = cpg.method.name(\"allocate_image_buffer\").parameter.name(\"width|height\").l",
+            "val multiplication = cpg.call.methodFullName(\"<operator>.multiplication\").l",
+            "val mallocCall = cpg.call.name(\"malloc\").argument.isIdentifier.l",
+            "mallocCall.reachableByFlows(params)"
+        ],
+        "expected_vulnerability": "Integer overflow in size calculation (width * height * 4) leading to small malloc allocation"
+    },
+    {
+        "id": "bench_005",
+        "name": "Format String Vulnerability",
+        "cwe": "CWE-134",
+        "vulnerability_type": "Format String",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void log_message(char *user_message) {\n    FILE *logfile = fopen(\"/var/log/app.log\", \"a\");\n    \n    // Vulnerable: user input directly in format string\n    fprintf(logfile, user_message);\n    \n    fclose(logfile);\n}",
+        "ground_truth_queries": [
+            "val userInput = cpg.method.name(\"log_message\").parameter.name(\"user_message\").l",
+            "val formatSinks = cpg.call.name(\"fprintf\").where(_.argument.order(2).isIdentifier).l",
+            "formatSinks.reachableByFlows(userInput)"
+        ],
+        "expected_vulnerability": "Format string vulnerability allowing arbitrary memory read/write via user_message"
+    },
+    {
+        "id": "bench_006",
+        "name": "Path Traversal",
+        "cwe": "CWE-22",
+        "vulnerability_type": "Path Traversal",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void read_config_file(char *filename) {\n    char filepath[512];\n    FILE *fp;\n    \n    // Vulnerable: no path validation\n    sprintf(filepath, \"/etc/config/%s\", filename);\n    fp = fopen(filepath, \"r\");\n    \n    if (fp != NULL) {\n        // Read and process file\n        fclose(fp);\n    }\n}",
+        "ground_truth_queries": [
+            "val filenameParam = cpg.method.name(\"read_config_file\").parameter.name(\"filename\").l",
+            "val pathConstruction = cpg.call.name(\"sprintf\").argument.isIdentifier.l",
+            "val fileSinks = cpg.call.name(\"fopen\").argument.isIdentifier.l",
+            "fileSinks.reachableByFlows(filenameParam)"
+        ],
+        "expected_vulnerability": "Path traversal via unsanitized filename parameter allowing access to arbitrary files"
+    },
+    {
+        "id": "bench_007",
+        "name": "Command Injection",
+        "cwe": "CWE-78",
+        "vulnerability_type": "OS Command Injection",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void backup_file(char *filename) {\n    char command[1024];\n    \n    // Vulnerable: command injection\n    sprintf(command, \"tar -czf /backup/%s.tar.gz %s\", filename, filename);\n    system(command);\n}",
+        "ground_truth_queries": [
+            "val userInput = cpg.method.name(\"backup_file\").parameter.name(\"filename\").l",
+            "val cmdConstruction = cpg.call.name(\"sprintf\").argument.isIdentifier.l",
+            "val execSinks = cpg.call.name(\"system\").argument.isIdentifier.l",
+            "execSinks.reachableByFlows(userInput)"
+        ],
+        "expected_vulnerability": "Command injection via unsanitized filename parameter passed to system()"
+    },
+    {
+        "id": "bench_008",
+        "name": "Double Free",
+        "cwe": "CWE-415",
+        "vulnerability_type": "Double Free",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void process_request(int error_code) {\n    char *buffer = (char*)malloc(256);\n    \n    if (error_code != 0) {\n        free(buffer);\n        return;\n    }\n    \n    // Process buffer\n    strcpy(buffer, \"data\");\n    \n    free(buffer);  // Potential double free if error_code != 0 path taken first\n}",
+        "ground_truth_queries": [
+            "val mallocCall = cpg.call.name(\"malloc\").argument.isIdentifier.l",
+            "val freeCalls = cpg.call.name(\"free\").argument.isIdentifier.l",
+            "val firstFree = freeCalls.where(_.lineNumber.isDefined).l.sortBy(_.lineNumber.get).head",
+            "val secondFree = freeCalls.where(_.lineNumber.isDefined).l.sortBy(_.lineNumber.get).last",
+            "secondFree.reachableByFlows(firstFree)"
+        ],
+        "expected_vulnerability": "Double free of buffer pointer in error handling path"
+    },
+    {
+        "id": "bench_009",
+        "name": "Race Condition",
+        "cwe": "CWE-362",
+        "vulnerability_type": "Time-of-check Time-of-use (TOCTOU)",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "void safe_write(char *filename, char *data) {\n    // Check if file exists\n    if (access(filename, F_OK) != 0) {\n        // TOCTOU: File could be created here by attacker\n        FILE *fp = fopen(filename, \"w\");\n        if (fp) {\n            fprintf(fp, \"%s\", data);\n            fclose(fp);\n        }\n    }\n}",
+        "ground_truth_queries": [
+            "val checkCall = cpg.call.name(\"access\").argument.isIdentifier.l",
+            "val useCall = cpg.call.name(\"fopen\").argument.isIdentifier.l",
+            "val filenameParam = cpg.method.name(\"safe_write\").parameter.name(\"filename\").l",
+            "useCall.reachableByFlows(checkCall)"
+        ],
+        "expected_vulnerability": "TOCTOU race condition between access() check and fopen() use"
+    },
+    {
+        "id": "bench_010",
+        "name": "Null Pointer Dereference",
+        "cwe": "CWE-476",
+        "vulnerability_type": "Null Pointer Dereference",
+        "instruction": "Your task is to design Precise Joern CPGQL Queries for Vulnerability Analysis.\n\nObjective:\nDevelop targeted CPGQL Joern queries to:\n1. Identify taint flows based on your analysis\n2. Capture potential vulnerability paths\n3. Exclude paths with existing sanitizers\n\nConstraints:\n- Queries must be executable in Joern/CPGQL\n- Use Scala language features for query construction\n- Last query must use reachableByFlows to identify vulnerable paths\n- Validate absence of sanitizers in potential vulnerability paths\n\nOutput Requirements:\n- Provide a JSON object with one field:\n  \"queries\": Sequence of CPGQL queries to detect vulnerability\n\nExpected JSON Output Format:\n```json\n{\n  \"queries\": [\"Query1\", \"Query2\", ..., \"Final Reachable Flows Query\"]\n}\n```",
+        "code": "struct User {\n    char *name;\n    int age;\n};\n\nvoid print_user(struct User *user) {\n    // Vulnerable: no null check\n    printf(\"User: %s, Age: %d\\n\", user->name, user->age);\n}\n\nvoid process() {\n    struct User *u = find_user(\"john\");  // May return NULL\n    print_user(u);  // Null pointer dereference if find_user returns NULL\n}",
+        "ground_truth_queries": [
+            "val nullReturns = cpg.call.name(\"find_user\").l",
+            "val pointerUse = cpg.call.name(\"print_user\").argument.isIdentifier.l",
+            "val dereferences = cpg.fieldAccess.where(_.code.contains(\"user->\")).l",
+            "dereferences.reachableByFlows(nullReturns)"
+        ],
+        "expected_vulnerability": "Null pointer dereference when accessing user->name without null check"
+    }
+]
